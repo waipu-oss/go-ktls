@@ -106,7 +106,7 @@ func fetch(u *url.URL, maxChunk int, seed ...uint64) (result, error) {
 	defer func() { _ = raw.Close() }()
 	_ = raw.SetDeadline(time.Now().Add(20 * time.Second))
 
-	var under net.Conn = raw
+	under := raw
 	if maxChunk > 0 {
 		s := uint64(1)
 		if len(seed) > 0 {
@@ -117,7 +117,7 @@ func fetch(u *url.URL, maxChunk int, seed ...uint64) (result, error) {
 
 	tc := tls.Client(under, &tls.Config{
 		ServerName:         u.Hostname(),
-		InsecureSkipVerify: true, //nolint:gosec // transport correctness check against a dev/edge cert
+		InsecureSkipVerify: true, //nolint:gosec // transport correctness check; the cert may be self-signed
 		MinVersion:         tls.VersionTLS13,
 		MaxVersion:         tls.VersionTLS13,
 		NextProtos:         []string{"http/1.1"},

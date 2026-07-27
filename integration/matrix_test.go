@@ -16,9 +16,8 @@
 // namespace-global TlsTxSw delta per request as a hint. It is NOT asserted:
 // that counter is shared across all connections in the namespace and cannot
 // be attributed to a single request on a host with concurrent traffic. The
-// authoritative per-connection offload verdict is the reason the server's own
-// WithObserver callback reported for the connection (read out-of-band, e.g.
-// from the server's logs or metrics).
+// authoritative per-connection verdict is the reason the server's WithObserver
+// callback reported, read out-of-band from its logs or metrics.
 //
 // Limitation: Go's crypto/tls client cannot pin a TLS 1.3 cipher suite
 // (CipherSuites only controls <= TLS 1.2), so sweeping all three TLS 1.3
@@ -189,9 +188,9 @@ func TestKTLSMatrix(t *testing.T) {
 				// TlsTxSw is a namespace-global counter: its delta cannot be
 				// attributed to this single connection on a host with any
 				// concurrent TLS traffic, so it is logged as a hint, never
-				// asserted. The authoritative per-connection offload verdict is
-				// the reason the server's WithObserver callback reported (read
-				// out-of-band), not this counter.
+				// asserted. The authoritative per-connection verdict is the
+				// reason the server's WithObserver callback reported, not this
+				// counter.
 				delta := readTxSw(t, statPath) - before
 				t.Logf("TlsTxSw namespace-global delta=%d (hint only; want offloaded=%v)", delta, tc.wantOffload)
 			}

@@ -47,10 +47,9 @@ var kernelSupport = sync.OnceValue(func() bool {
 	return err == nil || errors.Is(err, unix.ENOTCONN)
 })
 
-// Available reports whether the kernel supports kTLS, i.e. whether the tls
-// module is loaded (see modprobe tls). It is probed once and cached. When it
-// reports false, every connection falls back to userspace TLS
-// (ReasonKernel).
+// Available reports whether the kernel supports kTLS (tls module loaded),
+// probed once and cached. When false, every connection falls back to userspace
+// TLS (ReasonKernel).
 func Available() bool {
 	return kernelSupport()
 }
@@ -131,10 +130,9 @@ func setTLSCrypto(rc syscall.RawConn, direction int, info []byte) error {
 // hands the page-cache pages directly to the AEAD as its source
 // (tls_sw_sendmsg_splice).
 //
-// Zero-copy-RO requires that the pages are not modified while in flight, which
-// holds for the immutable files a static/cached response is served from. Best-
-// effort: failure keeps the copying device send path; the offload itself is
-// unaffected.
+// Zero-copy-RO requires the pages not be modified in flight, which holds for
+// immutable files (a static or cached response body). Best-effort: failure
+// keeps the copying device send path; the offload itself is unaffected.
 func enableTXZerocopy(rc syscall.RawConn) {
 	_ = controlFD(rc, func(fd int) error {
 		return unix.SetsockoptInt(fd, unix.SOL_TLS, tlsTXZerocopyRO, 1)

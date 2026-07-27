@@ -238,6 +238,9 @@ func (l *Listener) ticketRotationLoop() {
 	}
 }
 
+// Accept returns the next established connection: a kTLS-offloaded Conn, or a
+// *tls.Conn on fallback. The handshake has already completed (the offload
+// requires it); its failures reach the observer, not the caller.
 func (l *Listener) Accept() (net.Conn, error) {
 	select {
 	case c := <-l.connc:
@@ -249,6 +252,8 @@ func (l *Listener) Accept() (net.Conn, error) {
 	}
 }
 
+// Close closes the wrapped listener and stops the accept loop and ticket key
+// rotation. Connections already returned from Accept are unaffected.
 func (l *Listener) Close() error {
 	l.closeOnce.Do(func() {
 		close(l.done)
@@ -258,6 +263,7 @@ func (l *Listener) Close() error {
 	return l.closeErr
 }
 
+// Addr returns the wrapped listener's network address.
 func (l *Listener) Addr() net.Addr {
 	return l.inner.Addr()
 }
