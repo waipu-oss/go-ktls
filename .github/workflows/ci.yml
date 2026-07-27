@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (linux, kernel TLS)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # kernel_linux_test.go skips itself when tls.ko is absent. That is an
+      # environment limit, not a defect, so load it best effort and warn.
+      - name: Load kernel tls module
+        run: |
+          uname -r
+          sudo modprobe tls || echo "modprobe tls failed"
+          if lsmod | grep -q '^tls '; then
+            echo "tls module loaded: kernel TLS tests will run"
+          else
+            echo "::warning::tls module unavailable, kernel TLS tests will skip"
+          fi
+
+      # -tags integration is a superset: the tag only adds the integration
+      # harness, nothing in the repo is built with !integration.
+      - name: go vet
+        run: go vet -tags integration ./...
+
+      - name: go mod tidy is up to date
+        run: go mod tidy -diff
+
+      - name: go mod verify
+        run: go mod verify
+
+      - name: Test
+        run: go test -race -count=1 -coverprofile=coverage.out ./...
+
+      - name: Coverage
+        run: go tool cover -func=coverage.out | tail -1
+
+  lint:
+    name: Lint (${{ matrix.goos }})
+    runs-on: ubuntu-24.04
+    # Ohne Matrix bliebe je nach GOOS eine Datei ungelesen: offload_linux.go
+    # oder offload_stub.go (!linux). darwin deckt den Stub-Pfad ab.
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin]
+    env:
+      GOOS: ${{ matrix.goos }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # Covers gofmt via the formatters section of .golangci.yml.
+      - uses: golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0
+        with:
+          version: v2.12.2
+
+      - name: Lint (integration tag)
+        run: golangci-lint run --build-tags integration ./...
+
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Offload path.
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          # Userspace-TLS fallback (offload_stub.go).
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: freebsd, goarch: amd64 }
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...

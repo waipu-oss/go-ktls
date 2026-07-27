@@ -1,5 +1,6 @@
 # go-ktls
 
+[![CI](https://github.com/waipu-oss/go-ktls/actions/workflows/ci.yml/badge.svg)](https://github.com/waipu-oss/go-ktls/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/waipu-oss/go-ktls.svg)](https://pkg.go.dev/github.com/waipu-oss/go-ktls)
 
 Kernel TLS offload for a Go HTTPS listener.
