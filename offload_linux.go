@@ -35,7 +35,7 @@ var kernelSupport = sync.OnceValue(func() bool {
 	if err != nil {
 		return false
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 
 	// The probe socket is not connected. A kernel with kTLS support reports
 	// ENOTCONN here (the "tls" ULP is recognized but its init requires an
@@ -240,7 +240,7 @@ func sendKeyUpdate(rc syscall.RawConn) error {
 	if err := rc.Write(func(fd uintptr) bool {
 		opErr = unix.Sendmsg(int(fd), payload, oob, nil, 0)
 
-		return opErr != unix.EAGAIN && opErr != unix.EINTR
+		return !errors.Is(opErr, unix.EAGAIN) && !errors.Is(opErr, unix.EINTR)
 	}); err != nil {
 		return err
 	}

@@ -160,7 +160,7 @@ func (c *conn) Read(b []byte) (int, error) {
 func (c *conn) doRecvmsg(fd uintptr) bool {
 	c.rxN, c.rxType, c.rxErr = recvmsgRecordType(int(fd), c.rxBuf, c.oob[:])
 
-	return c.rxErr != unix.EAGAIN && c.rxErr != unix.EINTR
+	return !errors.Is(c.rxErr, unix.EAGAIN) && !errors.Is(c.rxErr, unix.EINTR)
 }
 
 // recvRecord performs one recvmsg on the kTLS socket and returns the data
