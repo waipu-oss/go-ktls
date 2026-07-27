@@ -1,0 +1,36 @@
+version: "2"
+
+linters:
+  # Defaults (errcheck, govet, ineffassign, staticcheck, unused) plus what pays
+  # off for syscalls, unsafe pointer arithmetic and TLS crypto.
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - gosec
+    - misspell
+    - nilerr
+    - revive
+    - unconvert
+    - unparam
+
+  exclusions:
+    rules:
+      # Tests and the example negotiate TLS 1.2 on purpose (that is the offload
+      # path), skip verification against throwaway servers, and drop error
+      # checks that would only add noise.
+      - path: _test\.go
+        linters:
+          - bodyclose
+          - errcheck
+          - errorlint
+          - gosec
+          - unparam
+      - path: _test\.go
+        linters:
+          - revive
+        text: unused-parameter
+
+formatters:
+  enable:
+    - gofmt

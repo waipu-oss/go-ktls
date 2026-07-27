@@ -1,5 +1,6 @@
 # go-ktls
 
+[![CI](https://github.com/waipu-oss/go-ktls/actions/workflows/ci.yml/badge.svg)](https://github.com/waipu-oss/go-ktls/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/waipu-oss/go-ktls.svg)](https://pkg.go.dev/github.com/waipu-oss/go-ktls)
 [![Go Report Card](https://goreportcard.com/badge/github.com/waipu-oss/go-ktls)](https://goreportcard.com/report/github.com/waipu-oss/go-ktls)
 
@@ -23,8 +24,7 @@ the full rationale and the design of each path.
 go get github.com/waipu-oss/go-ktls
 ```
 
-Requires Go 1.25 or newer. The package builds on every platform; the offload
-itself is Linux-only (see [Requirements](#requirements)).
+Requires Go 1.25. Builds everywhere; the offload itself is Linux-only.
 
 ## Usage
 
