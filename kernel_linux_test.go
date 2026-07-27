@@ -11,9 +11,12 @@ import (
 	"crypto/cipher"
 	"crypto/tls"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -23,6 +26,45 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// reasonRecorder collects the observer reasons of a listener, so a test that
+// required an offload can report why the connection fell back instead of only
+// that it did.
+type reasonRecorder struct {
+	mu      sync.Mutex
+	reasons []string
+}
+
+func (r *reasonRecorder) observe(reason string, _ net.Addr, _ tls.ConnectionState, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if err != nil {
+		reason = fmt.Sprintf("%s (%v)", reason, err)
+	}
+	r.reasons = append(r.reasons, reason)
+}
+
+func (r *reasonRecorder) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if len(r.reasons) == 0 {
+		return "none"
+	}
+
+	return strings.Join(r.reasons, "; ")
+}
+
+// offloadedListener pairs a test listener with the recorder acceptOffloaded
+// reads its diagnostics from.
+func offloadedListener(t *testing.T, cfg *tls.Config) (*Listener, *reasonRecorder) {
+	t.Helper()
+
+	rec := &reasonRecorder{}
+
+	return newTestListener(t, cfg, WithObserver(rec.observe)), rec
+}
+
 func requireKernelTLS(t *testing.T) {
 	t.Helper()
 
@@ -31,8 +73,9 @@ func requireKernelTLS(t *testing.T) {
 	}
 }
 
-// acceptOffloaded accepts one connection and requires it to be kTLS-offloaded.
-func acceptOffloaded(t *testing.T, l *Listener) *conn {
+// acceptOffloaded accepts one connection and requires it to be kTLS-offloaded,
+// naming the observer's fallback reason if it is not.
+func acceptOffloaded(t *testing.T, l *Listener, rec *reasonRecorder) *conn {
 	t.Helper()
 
 	type result struct {
@@ -52,7 +95,7 @@ func acceptOffloaded(t *testing.T, l *Listener) *conn {
 		t.Cleanup(func() { _ = r.c.Close() })
 
 		kc, ok := r.c.(*conn)
-		require.True(t, ok, "expected an offloaded connection, got %T", r.c)
+		require.True(t, ok, "expected an offloaded connection, got %T; observer reasons: %s", r.c, rec)
 
 		return kc
 	case <-time.After(10 * time.Second):
@@ -66,7 +109,7 @@ func TestKernelCloseNotifyMapsToEOF(t *testing.T) {
 	requireKernelTLS(t)
 
 	cfg := &tls.Config{Certificates: []tls.Certificate{testCert(t)}, MinVersion: tls.VersionTLS13}
-	l := newTestListener(t, cfg)
+	l, rec := offloadedListener(t, cfg)
 
 	client, err := tls.Dial("tcp", l.Addr().String(), &tls.Config{
 		InsecureSkipVerify: true, //nolint:gosec // test
@@ -76,7 +119,7 @@ func TestKernelCloseNotifyMapsToEOF(t *testing.T) {
 	t.Cleanup(func() { _ = client.Close() })
 	require.NoError(t, client.Handshake())
 
-	sc := acceptOffloaded(t, l)
+	sc := acceptOffloaded(t, l, rec)
 	require.NoError(t, sc.SetReadDeadline(time.Now().Add(10*time.Second)))
 
 	_, err = client.Write([]byte("ping"))
@@ -144,7 +187,7 @@ func newKeyUpdateConn(t *testing.T) *keyUpdateConn {
 		// client-side record cipher for the server direction starts at 0 too.
 		SessionTicketsDisabled: true,
 	}
-	l := newTestListener(t, cfg)
+	l, rec := offloadedListener(t, cfg)
 
 	raw, err := net.Dial("tcp", l.Addr().String())
 	require.NoError(t, err)
@@ -168,7 +211,7 @@ func newKeyUpdateConn(t *testing.T) *keyUpdateConn {
 	serverSecret, err := parseTrafficSecret(keyLog.String(), labelServerTraffic)
 	require.NoError(t, err)
 
-	sc := acceptOffloaded(t, l)
+	sc := acceptOffloaded(t, l, rec)
 	require.NoError(t, sc.SetReadDeadline(time.Now().Add(10*time.Second)))
 
 	// With session tickets disabled nothing went out under the application
