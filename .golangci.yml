@@ -16,6 +16,12 @@ linters:
 
   exclusions:
     rules:
+      # Parsing the kernel's cmsghdr requires unsafe pointer casts; G103 is
+      # informational and fires on every one of them.
+      - path: _linux\.go
+        linters:
+          - gosec
+        text: G103
       # Tests and the example negotiate TLS 1.2 on purpose (that is the offload
       # path), skip verification against throwaway servers, and drop error
       # checks that would only add noise.
