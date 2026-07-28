@@ -1,0 +1,38 @@
+version: 2
+
+updates:
+  # The workflow pins actions to commit SHAs, which is what keeps a repointed
+  # tag from running with this repo's GITHUB_TOKEN. The tradeoff is that pins go
+  # stale silently, so Dependabot owns bumping them; it rewrites the hash and
+  # the trailing version comment together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: ci
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # golang.org/x/sys carries the kTLS constants and syscall wrappers this
+      # package builds on, so its bumps are worth reading on their own rather
+      # than buried in a group with the test dependencies.
+      go-deps:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - golang.org/x/sys
+    commit-message:
+      prefix: build
+      prefix-development: test
