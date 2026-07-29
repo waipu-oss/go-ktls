@@ -344,17 +344,22 @@ func (l *Listener) setupConn(raw net.Conn) (net.Conn, error) {
 	cfg := l.cfg.Clone()
 	cfg.KeyLogWriter = sniffer
 
-	// Resumed TLS 1.2 logs no CLIENT_RANDOM: WrapSession stashes the master (still
-	// in the key log at full-handshake issue) in the ticket's Extra field, and
-	// UnwrapSession reads it back. recoveredMaster is written in UnwrapSession and
-	// read by prepareKeys after Handshake(), both on this goroutine, so no locking.
+	// Resumed TLS 1.2 logs no CLIENT_RANDOM: WrapSession stashes the master in the
+	// ticket's Extra field, UnwrapSession reads it back. recoveredMaster is
+	// written in UnwrapSession and read by WrapSession and prepareKeys, all on
+	// this goroutine, so no locking.
 	var recoveredMaster []byte
 	if l.manageTickets {
 		cfg.WrapSession = func(cs tls.ConnectionState, ss *tls.SessionState) ([]byte, error) {
-			// Only offloadable TLS 1.2 needs this (skip 1.3 PSK / gate-off tickets).
-			if l.recoverableTLS12(cs.Version) {
-				if _, master, err := sniffer.masterSecret(); err == nil {
-					appendMasterExtra(ss, master)
+			// The key log wins: it is only written on a full handshake, where a
+			// ticket declined by crypto/tls could otherwise leak a stale master
+			// into the new one. Not gated, a ticket issued while the gate is
+			// closed must still work once it opens.
+			if cs.Version == tls.VersionTLS12 {
+				if _, logged, err := sniffer.masterSecret(); err == nil {
+					appendMasterExtra(ss, logged)
+				} else if recoveredMaster != nil {
+					appendMasterExtra(ss, recoveredMaster)
 				}
 			}
 
@@ -367,7 +372,7 @@ func (l *Listener) setupConn(raw net.Conn) (net.Conn, error) {
 			if err != nil || ss == nil {
 				return ss, err
 			}
-			if l.recoverableTLS12(cs.Version) {
+			if cs.Version == tls.VersionTLS12 {
 				if master, ok := masterFromExtra(ss); ok {
 					recoveredMaster = master
 				}
@@ -435,19 +440,6 @@ func (l *Listener) setupConn(raw net.Conn) (net.Conn, error) {
 
 		return tlsConn, nil
 	}
-}
-
-// offloadGateOpen reports whether the runtime gate (feature flag) allows
-// offload. Not gated on Available(): a kTLS-less node still runs the recovery
-// so the fallback is attributed to ReasonKernel, not ReasonSecrets.
-func (l *Listener) offloadGateOpen() bool {
-	return l.gate == nil || l.gate()
-}
-
-// recoverableTLS12 reports whether this connection is an offloadable TLS 1.2
-// session whose ticket should carry (and recover) the master secret.
-func (l *Listener) recoverableTLS12(version uint16) bool {
-	return version == tls.VersionTLS12 && l.offloadGateOpen()
 }
 
 // offloadDecision returns the empty string when the connection should be
