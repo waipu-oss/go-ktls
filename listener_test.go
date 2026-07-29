@@ -615,12 +615,16 @@ func TestHandshakeTimeoutClosesConnection(t *testing.T) {
 // loop and the process survive. A synthetic panic is injected via the decision
 // hook, which runs inside the handshake goroutine.
 func TestHandshakePanicRecovered(t *testing.T) {
-	var panicOnce sync.Once
+	var panicOnce, obsOnce sync.Once
 	reasons := make(chan string, 4)
 
 	cfg := &tls.Config{Certificates: []tls.Certificate{testCert(t)}, MinVersion: tls.VersionTLS13}
 	l := newTestListener(t, cfg,
-		WithObserver(func(reason string, _ net.Addr, _ tls.ConnectionState, _ error) { reasons <- reason }),
+		// The observer panics on the ReasonPanic report itself, the fatal path.
+		WithObserver(func(reason string, _ net.Addr, _ tls.ConnectionState, _ error) {
+			reasons <- reason
+			obsOnce.Do(func() { panic("synthetic observer panic") })
+		}),
 		withTestHook(func(decision) { panicOnce.Do(func() { panic("synthetic handshake panic") }) }),
 	)
 

@@ -129,7 +129,8 @@ func WithHandshakeTimeout(d time.Duration) Option {
 // labelling (zero value on a handshake error, before any negotiation), and
 // remoteAddr identifies the peer (e.g. for handshake-error logs matching
 // net/http's "TLS handshake error from <addr>" format).
-// Useful for metrics. Must be safe for concurrent use.
+// Useful for metrics. Must be safe for concurrent use and must not panic: a
+// panic costs the connection it was reporting on.
 func WithObserver(f func(reason string, remoteAddr net.Addr, state tls.ConnectionState, err error)) Option {
 	return func(l *Listener) { l.observer = f }
 }
@@ -312,8 +313,7 @@ func (l *Listener) handshake(raw net.Conn) {
 			// err carries the panic value and stack; the consumer (observer)
 			// supplies the "panic" wording via ReasonPanic, mirroring how the
 			// handshake-error path leaves the message to the caller.
-			l.observe(ReasonPanic, raw.RemoteAddr(), tls.ConnectionState{},
-				fmt.Errorf("%v\n%s", r, debug.Stack()))
+			l.observeRecovered(raw.RemoteAddr(), fmt.Errorf("%v\n%s", r, debug.Stack()))
 			_ = raw.Close()
 		}
 	}()
@@ -606,4 +606,12 @@ func (l *Listener) observe(reason string, remoteAddr net.Addr, state tls.Connect
 	if l.observer != nil {
 		l.observer(reason, remoteAddr, state, err)
 	}
+}
+
+// observeRecovered reports a recovered panic. It runs inside the recover, where
+// a panicking observer would unwind past it and kill the process.
+func (l *Listener) observeRecovered(remoteAddr net.Addr, err error) {
+	defer func() { _ = recover() }()
+
+	l.observe(ReasonPanic, remoteAddr, tls.ConnectionState{}, err)
 }
