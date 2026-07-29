@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -306,26 +307,22 @@ func TestTLS12Offloadable(t *testing.T) {
 	assert.Equal(t, 1, ds[0].txRecords, "TLS 1.2 TX continues after the server Finished")
 }
 
-// TestTLS12ResumptionOffloadable proves a resumed TLS 1.2 session stays
-// offloadable. crypto/tls logs CLIENT_RANDOM only on a full handshake, so the
-// abbreviated resumption flow leaves the key-log sniffer empty; the master
-// secret is recovered by decrypting the presented ticket (UnwrapSession) and
-// the client random is taken from the wire. The resumed connection's decision
-// must be offloadable (or ReasonKernel where kTLS is absent), never
-// ReasonSecrets, that is the regression this guards.
-func TestTLS12ResumptionOffloadable(t *testing.T) {
-	decCh := make(chan decision, 2)
+// tls12ResumeDialer starts a TLS 1.2-only listener, drains accepted conns so the
+// handshake goroutines do not block on Accept, and returns a dialer sharing one
+// client session cache so successive calls resume.
+func tls12ResumeDialer(t *testing.T, opts ...Option) func() (tls.ConnectionState, decision) {
+	t.Helper()
+
+	decCh := make(chan decision, 1)
 	l := newTestListener(t,
 		&tls.Config{
 			Certificates: []tls.Certificate{testCert(t)},
 			MinVersion:   tls.VersionTLS12,
 			MaxVersion:   tls.VersionTLS12,
 		},
-		withTestHook(func(d decision) { decCh <- d }),
+		append(opts, withTestHook(func(d decision) { decCh <- d }))...,
 	)
 
-	// Drain delivered connections so the per-connection handshake goroutines do
-	// not block on the unbuffered Accept channel after recording their decision.
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -337,7 +334,8 @@ func TestTLS12ResumptionOffloadable(t *testing.T) {
 	}()
 
 	cache := tls.NewLRUClientSessionCache(8)
-	dial := func() (tls.ConnectionState, decision) {
+
+	return func() (tls.ConnectionState, decision) {
 		t.Helper()
 
 		conn, err := tls.Dial("tcp", l.Addr().String(), &tls.Config{
@@ -359,6 +357,17 @@ func TestTLS12ResumptionOffloadable(t *testing.T) {
 			return st, decision{}
 		}
 	}
+}
+
+// TestTLS12ResumptionOffloadable proves a resumed TLS 1.2 session stays
+// offloadable. crypto/tls logs CLIENT_RANDOM only on a full handshake, so the
+// abbreviated resumption flow leaves the key-log sniffer empty; the master
+// secret is recovered by decrypting the presented ticket (UnwrapSession) and
+// the client random is taken from the wire. The resumed connection's decision
+// must be offloadable (or ReasonKernel where kTLS is absent), never
+// ReasonSecrets, that is the regression this guards.
+func TestTLS12ResumptionOffloadable(t *testing.T) {
+	dial := tls12ResumeDialer(t)
 
 	// First handshake: full, issues and caches the ticket (master via key log).
 	first, firstDec := dial()
@@ -373,6 +382,15 @@ func TestTLS12ResumptionOffloadable(t *testing.T) {
 		"resumed session must recover the master secret from the ticket, not fall back")
 	assert.True(t, secondDec.reason == "" || secondDec.reason == ReasonKernel,
 		"resumed TLS 1.2 must be offloadable via the recovered master secret, got %q", secondDec.reason)
+
+	// Third handshake: resumes from the ticket the resumed second one re-issued,
+	// which was minted with an empty key log.
+	third, thirdDec := dial()
+	require.True(t, third.DidResume, "third handshake must resume")
+	assert.NotEqual(t, ReasonSecrets, thirdDec.reason,
+		"a re-issued ticket must carry the master too, or the chain loses offload from here on")
+	assert.True(t, thirdDec.reason == "" || thirdDec.reason == ReasonKernel,
+		"third handshake in a resumption chain must still be offloadable, got %q", thirdDec.reason)
 }
 
 // TestCustomSessionHooksNotOverridden guards the gate that keeps us from
@@ -397,6 +415,25 @@ func TestCustomSessionHooksNotOverridden(t *testing.T) {
 		"caller WrapSession must not be overwritten by EncryptTicket")
 	assert.Equal(t, reflect.ValueOf(unwrap).Pointer(), reflect.ValueOf(l.cfg.UnwrapSession).Pointer(),
 		"caller UnwrapSession must be preserved")
+}
+
+// The gate exists to enable kTLS without a restart, so tickets minted while it
+// is closed must be offloadable the moment it opens.
+func TestTLS12TicketFromClosedGateStaysRecoverable(t *testing.T) {
+	var open atomic.Bool
+	dial := tls12ResumeDialer(t, WithOffloadGate(open.Load))
+
+	_, closedDec := dial()
+	require.Equal(t, ReasonFeatureDisabled, closedDec.reason, "gate is closed")
+
+	open.Store(true)
+
+	resumed, openDec := dial()
+	require.True(t, resumed.DidResume, "second handshake must resume the ticket issued while closed")
+	assert.NotEqual(t, ReasonSecrets, openDec.reason,
+		"a ticket issued behind a closed gate must still be recoverable once it opens")
+	assert.True(t, openDec.reason == "" || openDec.reason == ReasonKernel,
+		"resumption after opening the gate must be offloadable, got %q", openDec.reason)
 }
 
 func TestOldTLSVersionsStayInUserspace(t *testing.T) {
